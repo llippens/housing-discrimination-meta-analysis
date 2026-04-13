@@ -24,7 +24,7 @@ set.seed(8888)
 dir.root <- here::here()
 dir.public <- file.path(dir.root, "1_data", "public")
 dir.tables <- file.path(dir.root, "4_tables")
-dir.bayesian <- file.path(dir.tables, "6_reg_bhmra")
+dir.bayesian <- file.path(dir.tables, "5_reg_bhmra")
 
 ensure_dir(dir.tables)
 dir.bayesian.dirs <- reg_output_dirs(dir.bayesian)
@@ -35,7 +35,7 @@ dir.bayesian.appendix.interactions <- dir.bayesian.dirs$interactions
 # Inputs ####
 housing.meta.path <- file.path(dir.public, "housing_meta.rds")
 if (!file.exists(housing.meta.path)) {
-  stop("Run 2_code/1_wrangling.R first. Missing: ", housing.meta.path, call. = FALSE)
+  stop("Run 2_code/0_wrangling.R first. Missing: ", housing.meta.path, call. = FALSE)
 }
 
 housing.meta <- readRDS(housing.meta.path)
@@ -333,11 +333,11 @@ if (run.int.region.period) {
 
 # Bayesian fits ####
 if (!requireNamespace("brms", quietly = TRUE)) {
-  stop("Package brms is required for 2_code/6_reg_bhmra.R.", call. = FALSE)
+  stop("Package brms is required for 2_code/5_reg_bhmra.R.", call. = FALSE)
 }
 
 if (!requireNamespace("cmdstanr", quietly = TRUE)) {
-  stop("Package cmdstanr is required for 2_code/6_reg_bhmra.R.", call. = FALSE)
+  stop("Package cmdstanr is required for 2_code/5_reg_bhmra.R.", call. = FALSE)
 }
 
 bayes.backend <- "cmdstanr"

@@ -26,7 +26,7 @@ set.seed(8888)
 dir.root <- here::here()
 dir.public <- file.path(dir.root, "1_data", "public")
 dir.tables <- file.path(dir.root, "4_tables")
-dir.meta.main <- file.path(dir.tables, "3_meta_analysis")
+dir.meta.main <- file.path(dir.tables, "2_meta_analysis")
 dir.meta.main.appendix <- file.path(dir.meta.main, "appendix")
 
 ensure_dir(dir.tables)
@@ -36,7 +36,7 @@ ensure_dir(dir.meta.main.appendix)
 # Inputs ####
 housing.meta.path <- file.path(dir.public, "housing_meta.rds")
 if (!file.exists(housing.meta.path)) {
-  stop("Run 2_code/1_wrangling.R first. Missing: ", housing.meta.path, call. = FALSE)
+  stop("Run 2_code/0_wrangling.R first. Missing: ", housing.meta.path, call. = FALSE)
 }
 
 housing.meta <- readRDS(housing.meta.path)

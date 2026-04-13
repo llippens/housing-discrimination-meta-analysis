@@ -51,7 +51,7 @@ common_theme <-
 dir.root      <- here::here()
 dir.tables    <- file.path(dir.root, "4_tables")
 dir.figures   <- file.path(dir.root, "3_figures")
-dir.meta.main <- file.path(dir.tables, "3_meta_analysis")
+dir.meta.main <- file.path(dir.tables, "2_meta_analysis")
 
 dir.figures.appendix <- file.path(dir.figures, "appendix")
 
@@ -64,28 +64,28 @@ main.bundle.path <- file.path(dir.meta.main, "housing_meta_main.rds")
 
 housing.meta.main.bundle <- {
   if (!file.exists(main.bundle.path))
-    stop("Missing meta-analysis bundle: run 2_code/3_meta_analysis.R first.", call. = FALSE)
+    stop("Missing meta-analysis bundle: run 2_code/2_meta_analysis.R first.", call. = FALSE)
   readRDS(main.bundle.path)
 }
 
 housing.meta.table.main <- {
   tbl <- housing.meta.main.bundle[["housing.meta.summary"]]
   if (is.null(tbl))
-    stop("Missing RE ground summary in bundle: run 2_code/3_meta_analysis.R first.", call. = FALSE)
+    stop("Missing RE ground summary in bundle: run 2_code/2_meta_analysis.R first.", call. = FALSE)
   tbl
 }
 
 housing.meta.table.tgroup <- {
   tbl <- housing.meta.main.bundle[["housing.meta.treatment.summary"]]
   if (is.null(tbl))
-    stop("Missing RE treatment-group summary in bundle: run 2_code/3_meta_analysis.R first.", call. = FALSE)
+    stop("Missing RE treatment-group summary in bundle: run 2_code/2_meta_analysis.R first.", call. = FALSE)
   tbl
 }
 
 housing.meta.table.pet.peese <- {
   tbl <- housing.meta.main.bundle[["housing.meta.pet.peese.selected"]]
   if (is.null(tbl))
-    stop("Missing PET/PEESE selected table in bundle: run 2_code/3_meta_analysis.R first.", call. = FALSE)
+    stop("Missing PET/PEESE selected table in bundle: run 2_code/2_meta_analysis.R first.", call. = FALSE)
   tbl
 }
 
