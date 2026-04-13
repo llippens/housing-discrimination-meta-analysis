@@ -15,6 +15,7 @@ if (!requireNamespace("showtext", quietly = TRUE)) pak::pkg_install("showtext")
 library(showtext)
 font_add_google("Atkinson Hyperlegible", family = "Atkinson Hyperlegible Next")
 showtext_auto()
+showtext_opts(dpi = 500)    # match forest-plot ggsave dpi; updated before funnel saves
 
 # Helpers ####
 source(file.path(here::here(), "2_code", "functions", "core", "f_check_cols.R"))
@@ -412,6 +413,7 @@ funnel.tgroup.subs <- purrr::imap(
     })
   }
 )
+showtext_opts(dpi = 1000)   # match funnel-plot ggsave dpi
 # Save ground funnel plots ####
 for (sub_name in names(funnel.subs)) {
   sub <- funnel.subs[[sub_name]]
