@@ -41,10 +41,14 @@ run order.
 
 ```r
 # All packages install automatically via pak blocks at the top of each script.
-# Run scripts in order from your R console or RStudio:
 source("2_code/1_descriptives.R")
 source("2_code/2_meta_analysis.R")
-# ... etc.
+source("2_code/3_reg_remra.R")
+source("2_code/4_reg_uwlsmra.R")
+source("2_code/5_reg_bhmra.R")        # optional; requires CmdStan
+source("2_code/6_pub_bias.R")
+source("2_code/7_figures.R")
+source("2_code/8_country_estimates.R") # optional supplementary
 ```
 
 ---
