@@ -1,4 +1,4 @@
-# Housing Discrimination Meta-Analysis
+# The state of rental discrimination
 
 Replication code and analysis-ready data for:
 
