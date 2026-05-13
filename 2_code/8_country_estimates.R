@@ -20,6 +20,7 @@ source(file.path(here::here(), "2_code", "functions", "core", "f_models.R"))
 source(file.path(here::here(), "2_code", "functions", "core", "f_design_utils.R"))
 source(file.path(here::here(), "2_code", "functions", "reg", "f_metareg_helpers.R"))
 source(file.path(here::here(), "2_code", "functions", "reg", "f_uwls_helpers.R"))
+source(file.path(here::here(), "2_code", "functions", "reg", "f_pet_peese.R"))
 
 # Reproducibility ####
 set.seed(8888)
@@ -352,20 +353,46 @@ get_uwls_country_preds <- function(fit_result, countries, model_type,
   })
 }
 
-# PET/PEESE selection mirrors stage-5 rule (p < 0.10 → PEESE, else PET).
-select_pet_peese <- function(pet_obj, peese_obj) {
-  if (pet_obj$status == "ok" && is.finite(pet_obj$pet_p) && pet_obj$pet_p < 0.10) {
-    list(selected = "peese", obj = peese_obj)
-  } else if (pet_obj$status == "ok") {
-    list(selected = "pet", obj = pet_obj)
-  } else if (peese_obj$status == "ok") {
-    list(selected = "peese", obj = peese_obj)
-  } else {
-    list(
-      selected = "none",
-      obj = list(model = NULL, data = NULL, status = pet_obj$status, conv_ok = FALSE, pet_p = NA_real_)
-    )
-  }
+# Canonical S&D/Reed PET/PEESE selector applied per-scope (ground). Direction
+# is ground-conditional (gen -> positive, else negative); test alpha = 0.10 on
+# the bias-corrected effect from avg_predictions(pet, newdata with prratio_ln_se = 0).
+select_pet_peese <- function(pet_obj, peese_obj, scope_name) {
+  direction <- expected_direction_for_cell(ground_abbr = scope_name)
+
+  pet_fit_obj   <- if (identical(pet_obj$status, "ok"))   pet_obj$model   else NULL
+  peese_fit_obj <- if (identical(peese_obj$status, "ok")) peese_obj$model else NULL
+  pet_data      <- if (!is.null(pet_fit_obj)) pet_obj$data else NULL
+
+  sel <- select_pet_peese_canonical(
+    pet_fit   = pet_fit_obj,
+    peese_fit = peese_fit_obj,
+    newdata   = pet_data,
+    direction = direction,
+    alpha     = 0.10,
+    se_var    = "prratio_ln_se",
+    wts       = "uwls_weight"
+  )
+
+  selector_meta <- tibble::tibble(
+    bc_estimate           = sel$bc_estimate[[1]],
+    bc_std_error          = sel$bc_std_error[[1]],
+    bc_statistic          = sel$bc_statistic[[1]],
+    bc_p_value            = sel$bc_p_value[[1]],
+    bc_alpha              = sel$bc_alpha[[1]],
+    bc_direction_used     = sel$bc_direction_used[[1]],
+    selector_note         = sel$selector_note[[1]],
+    pet_term_p_value_diag = if (is.list(pet_obj) && "pet_p" %in% names(pet_obj)) pet_obj$pet_p else NA_real_
+  )
+
+  selected <- sel$selected_model[[1]]
+  obj <- switch(
+    selected,
+    "pet"   = pet_obj,
+    "peese" = peese_obj,
+    "none"  = list(model = NULL, data = NULL, status = pet_obj$status, conv_ok = FALSE, pet_p = NA_real_)
+  )
+
+  list(selected = selected, obj = obj, meta = selector_meta)
 }
 
 # Main execution ####
@@ -385,8 +412,8 @@ housing.meta.cty.list <- purrr::imap(
     uwls_cov_pet   <- fit_uwls_country(df, scope_name, "pet",   factor.cols, numeric.cols, with_covs = TRUE)
     uwls_cov_peese <- fit_uwls_country(df, scope_name, "peese", factor.cols, numeric.cols, with_covs = TRUE)
 
-    cty_sel <- select_pet_peese(uwls_cty_pet, uwls_cty_peese)
-    cov_sel <- select_pet_peese(uwls_cov_pet, uwls_cov_peese)
+    cty_sel <- select_pet_peese(uwls_cty_pet, uwls_cty_peese, scope_name = scope_name)
+    cov_sel <- select_pet_peese(uwls_cov_pet, uwls_cov_peese, scope_name = scope_name)
 
     uwls_cty_preds <- get_uwls_country_preds(cty_sel$obj, countries, cty_sel$selected)
     uwls_cov_preds <- get_uwls_country_preds(cov_sel$obj, countries, cov_sel$selected,
@@ -398,7 +425,13 @@ housing.meta.cty.list <- purrr::imap(
         uwls_cty_ci_low  = ci_low,  uwls_cty_ci_high  = ci_high,
         uwls_cty_conv_ok = conv_ok, uwls_cty_status   = status
       ) %>%
-      dplyr::mutate(uwls_cty_model_type = cty_sel$selected)
+      dplyr::mutate(
+        uwls_cty_model_type            = cty_sel$selected,
+        uwls_cty_bc_estimate           = cty_sel$meta$bc_estimate[[1]],
+        uwls_cty_bc_p_value            = cty_sel$meta$bc_p_value[[1]],
+        uwls_cty_bc_direction_used     = cty_sel$meta$bc_direction_used[[1]],
+        uwls_cty_pet_term_p_value_diag = cty_sel$meta$pet_term_p_value_diag[[1]]
+      )
 
     uwls_cov_tbl <- uwls_cov_preds %>%
       dplyr::rename(
@@ -406,7 +439,13 @@ housing.meta.cty.list <- purrr::imap(
         uwls_cov_ci_low  = ci_low,  uwls_cov_ci_high  = ci_high,
         uwls_cov_conv_ok = conv_ok, uwls_cov_status   = status
       ) %>%
-      dplyr::mutate(uwls_cov_model_type = cov_sel$selected)
+      dplyr::mutate(
+        uwls_cov_model_type            = cov_sel$selected,
+        uwls_cov_bc_estimate           = cov_sel$meta$bc_estimate[[1]],
+        uwls_cov_bc_p_value            = cov_sel$meta$bc_p_value[[1]],
+        uwls_cov_bc_direction_used     = cov_sel$meta$bc_direction_used[[1]],
+        uwls_cov_pet_term_p_value_diag = cov_sel$meta$pet_term_p_value_diag[[1]]
+      )
 
     obs_tbl %>%
       dplyr::left_join(remra_cty_tbl, by = "country") %>%
@@ -447,9 +486,13 @@ housing.meta.cty.estimates <- dplyr::bind_rows(housing.meta.cty.list) %>%
     remra_cov_prratio, remra_cov_prratio_ci_low, remra_cov_prratio_ci_high,
     uwls_cty_est, uwls_cty_se, uwls_cty_ci_low, uwls_cty_ci_high,
     uwls_cty_conv_ok, uwls_cty_status, uwls_cty_model_type,
+    uwls_cty_bc_estimate, uwls_cty_bc_p_value, uwls_cty_bc_direction_used,
+    uwls_cty_pet_term_p_value_diag,
     uwls_cty_prratio, uwls_cty_prratio_ci_low, uwls_cty_prratio_ci_high,
     uwls_cov_est, uwls_cov_se, uwls_cov_ci_low, uwls_cov_ci_high,
     uwls_cov_conv_ok, uwls_cov_status, uwls_cov_model_type,
+    uwls_cov_bc_estimate, uwls_cov_bc_p_value, uwls_cov_bc_direction_used,
+    uwls_cov_pet_term_p_value_diag,
     uwls_cov_prratio, uwls_cov_prratio_ci_low, uwls_cov_prratio_ci_high
   )
 
@@ -497,7 +540,11 @@ housing.meta.cty.dict <- tibble::tribble(
   "uwls_cty_ci_high",         "UWLS: country only (bias-corrected)","log PR ratio","Upper bound of the 95% CI (log scale).",                                                     NA_character_,
   "uwls_cty_conv_ok",         "UWLS: country only (bias-corrected)","logical",     "TRUE if the prediction returned a finite estimate and finite standard error.",               "FALSE indicates a numerical problem in avg_predictions; treat estimates as missing.",
   "uwls_cty_status",          "UWLS: country only (bias-corrected)","categorical", "Outcome of the UWLS country-level prediction.",                                              "ok = successful; collinear_dropped = country dummy was dropped from the model due to data sparsity — prediction would be uninformative (NA returned instead); prediction_error = avg_predictions failed; df_exceeded = model not fitted due to DF constraint; insufficient_n or insufficient_random_levels = too few observations or studies; error = model fitting error.",
-  "uwls_cty_model_type",      "UWLS: country only (bias-corrected)","categorical", "Which publication-bias correction was selected for this discrimination ground.",             "pet = PET (Precision Effect Test): linear regression on SE. Selected when the PET coefficient p-value >= 0.10, indicating no statistically significant publication bias. peese = PEESE (Precision Effect Estimate with Standard Error): linear regression on variance. Selected when PET p < 0.10, indicating significant publication bias. The same model type applies to all countries within a ground. Selection mirrors the rule used in the main regression stage (Stage 5).",
+  "uwls_cty_model_type",      "UWLS: country only (bias-corrected)","categorical", "Which publication-bias correction was selected for this discrimination ground.",             "Canonical Stanley & Doucouliagos (2014) / Reed (2023) rule: switch to PEESE iff the PET bias-corrected effect (avg_predictions at prratio_ln_se = 0, covariates at sample means, uwls_weight) is significant in the expected direction at one-sided alpha = 0.10; else PET. Direction is ground-conditional (gen -> positive, else negative). The same model applies to all countries within a ground.",
+  "uwls_cty_bc_estimate",     "UWLS: country only (bias-corrected)","log PR ratio","Bias-corrected effect from the PET fit averaged at prratio_ln_se = 0.",                      "Drives selection: PEESE chosen iff sign(bc_estimate) matches uwls_cty_bc_direction_used and uwls_cty_bc_p_value < 0.10.",
+  "uwls_cty_bc_p_value",      "UWLS: country only (bias-corrected)","numeric",     "Two-sided p-value associated with uwls_cty_bc_estimate from marginaleffects::avg_predictions.","One-sided gate is implemented by combining this p-value with a sign check against bc_direction_used.",
+  "uwls_cty_bc_direction_used","UWLS: country only (bias-corrected)","categorical","Expected sign of a genuine bias-corrected effect for this ground.",                          "negative for ero/hed/seo/soc and the overall scope; positive for gen (preferential treatment of women is common in housing).",
+  "uwls_cty_pet_term_p_value_diag","UWLS: country only (bias-corrected)","numeric", "Legacy diagnostic: p-value on the prratio_ln_se slope coefficient in the PET fit (Egger-style bias slope).","Not used for selection. Retained for cross-rule audit: the previous selector used this column with threshold 0.10.",
   "uwls_cty_prratio",         "UWLS: country only (bias-corrected)","PR ratio",    "Bias-corrected country estimate on the PR ratio scale: exp(uwls_cty_est).",                 NA_character_,
   "uwls_cty_prratio_ci_low",  "UWLS: country only (bias-corrected)","PR ratio",    "Lower bound of the 95% CI: exp(uwls_cty_ci_low).",                                          NA_character_,
   "uwls_cty_prratio_ci_high", "UWLS: country only (bias-corrected)","PR ratio",    "Upper bound of the 95% CI: exp(uwls_cty_ci_high).",                                         NA_character_,
@@ -508,7 +555,11 @@ housing.meta.cty.dict <- tibble::tribble(
   "uwls_cov_ci_high",         "UWLS: covariate-adjusted (bias-corrected)","log PR ratio","Upper bound of the 95% CI (log scale).",                                               NA_character_,
   "uwls_cov_conv_ok",         "UWLS: covariate-adjusted (bias-corrected)","logical",    "TRUE if the prediction returned a finite estimate and finite standard error.",           "NA when uwls_cov_status = 'df_exceeded' (model was not attempted).",
   "uwls_cov_status",          "UWLS: covariate-adjusted (bias-corrected)","categorical","Outcome of the covariate-adjusted UWLS prediction.",                                    "ok = successful; df_exceeded = model not fitted due to DF constraint (most common for gen/hed/seo/soc); none = both PET and PEESE models failed so no prediction is possible; other values same as uwls_cty_status.",
-  "uwls_cov_model_type",      "UWLS: covariate-adjusted (bias-corrected)","categorical","Which bias correction was selected for the covariate-adjusted UWLS model.",             "pet / peese: same logic as uwls_cty_model_type. none = both PET and PEESE failed (typically when uwls_cov_status = 'df_exceeded' for the whole ground).",
+  "uwls_cov_model_type",      "UWLS: covariate-adjusted (bias-corrected)","categorical","Which bias correction was selected for the covariate-adjusted UWLS model.",             "pet / peese: canonical S&D/Reed rule (see uwls_cty_model_type). none = both PET and PEESE failed (typically when uwls_cov_status = 'df_exceeded' for the whole ground).",
+  "uwls_cov_bc_estimate",     "UWLS: covariate-adjusted (bias-corrected)","log PR ratio","Bias-corrected effect from the covariate-adjusted PET fit averaged at prratio_ln_se = 0 with covariates at sample means.",NA_character_,
+  "uwls_cov_bc_p_value",      "UWLS: covariate-adjusted (bias-corrected)","numeric",    "Two-sided p-value for uwls_cov_bc_estimate; combined with the sign check against bc_direction_used for the one-sided gate.",NA_character_,
+  "uwls_cov_bc_direction_used","UWLS: covariate-adjusted (bias-corrected)","categorical","Expected sign for this ground; see uwls_cty_bc_direction_used.",                          NA_character_,
+  "uwls_cov_pet_term_p_value_diag","UWLS: covariate-adjusted (bias-corrected)","numeric","Legacy diagnostic (Egger-style slope p-value); see uwls_cty_pet_term_p_value_diag.",       NA_character_,
   "uwls_cov_prratio",         "UWLS: covariate-adjusted (bias-corrected)","PR ratio",   "Bias-corrected and covariate-adjusted estimate on the PR ratio scale: exp(uwls_cov_est).", NA_character_,
   "uwls_cov_prratio_ci_low",  "UWLS: covariate-adjusted (bias-corrected)","PR ratio",   "Lower bound of the 95% CI: exp(uwls_cov_ci_low).",                                    NA_character_,
   "uwls_cov_prratio_ci_high", "UWLS: covariate-adjusted (bias-corrected)","PR ratio",   "Upper bound of the 95% CI: exp(uwls_cov_ci_high).",                                   NA_character_

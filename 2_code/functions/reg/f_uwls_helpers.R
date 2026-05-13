@@ -1,5 +1,7 @@
 prepare_uwls_data <- function(data, factor_cols, numeric_cols) {
-  data %>%
+  # Center numerics at IV-weighted mean: without centering, the PET bias-corrected
+  # prediction's SE is inflated when an FE absorbs the intercept (gate becomes uninformative).
+  out <- data %>%
     dplyr::mutate(
       dplyr::across(
         dplyr::all_of(factor_cols),
@@ -7,9 +9,9 @@ prepare_uwls_data <- function(data, factor_cols, numeric_cols) {
           if (is.factor(.x)) {
             .x
           } else {
-            out <- stringr::str_trim(as.character(.x))
-            out[out == ""] <- NA_character_
-            as.factor(out)
+            out_x <- stringr::str_trim(as.character(.x))
+            out_x[out_x == ""] <- NA_character_
+            as.factor(out_x)
           }
         }
       ),
@@ -28,6 +30,22 @@ prepare_uwls_data <- function(data, factor_cols, numeric_cols) {
       !is.na(study),
       as.character(study) != ""
     )
+
+  for (nm in numeric_cols) {
+    if (nm %in% names(out)) {
+      v <- out[[nm]]
+      w <- out$uwls_weight
+      keep <- is.finite(v) & is.finite(w) & w > 0
+      if (any(keep) && sum(w[keep]) > 0) {
+        v_bar <- sum(v[keep] * w[keep]) / sum(w[keep])
+        if (is.finite(v_bar)) {
+          out[[nm]] <- out[[nm]] - v_bar
+          attr(out[[nm]], "uwls_center") <- v_bar
+        }
+      }
+    }
+  }
+  out
 }
 
 uwls_candidates_for_scope <- function(scope_name) {

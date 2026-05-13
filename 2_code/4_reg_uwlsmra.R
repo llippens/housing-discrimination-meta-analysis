@@ -3,7 +3,7 @@ if (!requireNamespace("pak", quietly = TRUE)) install.packages("pak")
 
 pkgs <- c(
   "here", "dplyr", "purrr", "tibble",
-  "fixest", "stringr", "writexl"
+  "fixest", "marginaleffects", "stringr", "writexl"
 )
 
 missing.pkgs <- pkgs[!pkgs %in% rownames(installed.packages())]
@@ -17,6 +17,7 @@ invisible(lapply(pkgs, library, character.only = TRUE))
 source(file.path(here::here(), "2_code", "functions", "core", "f_check_cols.R"))
 source(file.path(here::here(), "2_code", "functions", "core", "f_design_utils.R"))
 source(file.path(here::here(), "2_code", "functions", "reg", "f_uwls_helpers.R"))
+source(file.path(here::here(), "2_code", "functions", "reg", "f_pet_peese.R"))
 source(file.path(here::here(), "2_code", "functions", "io", "f_reg_specs.R"))
 source(file.path(here::here(), "2_code", "functions", "io", "f_reg_output.R"))
 source(file.path(here::here(), "2_code", "functions", "io", "f_reporting_workbooks.R"))
@@ -88,6 +89,64 @@ housing.meta.scope.data <- c(list(overall = housing.meta), housing.meta.by.groun
 model.types <- c("pet", "peese")
 
 # Helper functions ####
+uwls_choice_for_scope <- function(
+    scope_name,
+    design_list,
+    fit_list,
+    fit_status_tbl,
+    table_all
+) {
+  pet_status <- fit_status_tbl %>%
+    dplyr::filter(scope == scope_name, model_type == "pet") %>%
+    dplyr::pull(fit_status)
+  peese_status <- fit_status_tbl %>%
+    dplyr::filter(scope == scope_name, model_type == "peese") %>%
+    dplyr::pull(fit_status)
+  pet_term_p_diag <- table_all %>%
+    dplyr::filter(model_scope == scope_name, model_type == "pet", term == "prratio_ln_se") %>%
+    dplyr::pull(p_value)
+
+  pet_status <- if (length(pet_status) == 0) "missing" else pet_status[[1]]
+  peese_status <- if (length(peese_status) == 0) "missing" else peese_status[[1]]
+  pet_term_p_diag <- if (length(pet_term_p_diag) == 0) NA_real_ else pet_term_p_diag[[1]]
+
+  pet_design   <- design_list[[scope_name]][["pet"]]
+  peese_design <- design_list[[scope_name]][["peese"]]
+  pet_fit_obj   <- if (identical(pet_status, "ok"))   fit_list[[scope_name]][["pet"]]$model   else NULL
+  peese_fit_obj <- if (identical(peese_status, "ok")) fit_list[[scope_name]][["peese"]]$model else NULL
+  pet_data <- if (!is.null(pet_design)) pet_design$data else NULL
+
+  direction <- expected_direction_for_cell(
+    ground_abbr     = if (identical(scope_name, "overall")) NA_character_ else scope_name,
+    treatment_group = NA_character_
+  )
+
+  sel <- select_pet_peese_canonical(
+    pet_fit   = pet_fit_obj,
+    peese_fit = peese_fit_obj,
+    newdata   = pet_data,
+    direction = direction,
+    alpha     = 0.10,
+    se_var    = "prratio_ln_se",
+    wts       = "uwls_weight"
+  )
+
+  tibble::tibble(
+    scope                 = scope_name,
+    pet_status            = pet_status,
+    peese_status          = peese_status,
+    selected_model        = sel$selected_model[[1]],
+    bc_estimate           = sel$bc_estimate[[1]],
+    bc_std_error          = sel$bc_std_error[[1]],
+    bc_statistic          = sel$bc_statistic[[1]],
+    bc_p_value            = sel$bc_p_value[[1]],
+    bc_alpha              = sel$bc_alpha[[1]],
+    bc_direction_used     = sel$bc_direction_used[[1]],
+    selector_note         = sel$selector_note[[1]],
+    pet_term_p_value_diag = pet_term_p_diag
+  )
+}
+
 run_uwls_sensitivity <- function(
     scope_data,
     fe_terms,
@@ -123,7 +182,7 @@ run_uwls_sensitivity <- function(
             interaction_terms = interaction_terms
           )
         }
-      )
+      ) %>% stats::setNames(model.types)
     }
   )
 
@@ -153,34 +212,12 @@ run_uwls_sensitivity <- function(
   housing.meta.uwls.choice <- purrr::map_dfr(
     scope_names,
     function(scope_name) {
-      pet_status <- housing.meta.uwls.fit.status %>%
-        filter(scope == scope_name, model_type == "pet") %>%
-        pull(fit_status)
-      peese_status <- housing.meta.uwls.fit.status %>%
-        filter(scope == scope_name, model_type == "peese") %>%
-        pull(fit_status)
-
-      pet_p <- housing.meta.uwls.table.all %>%
-        filter(model_scope == scope_name, model_type == "pet", term == "prratio_ln_se") %>%
-        pull(p_value)
-
-      pet_status <- if (length(pet_status) == 0) "missing" else pet_status[[1]]
-      peese_status <- if (length(peese_status) == 0) "missing" else peese_status[[1]]
-      pet_p <- if (length(pet_p) == 0) NA_real_ else pet_p[[1]]
-
-      selected <- dplyr::case_when(
-        pet_status == "ok" & is.finite(pet_p) & pet_p < 0.10 ~ "peese",
-        pet_status == "ok" ~ "pet",
-        pet_status != "ok" & peese_status == "ok" ~ "peese",
-        TRUE ~ "none"
-      )
-
-      tibble(
-        scope = scope_name,
-        pet_p_value = pet_p,
-        pet_status = pet_status,
-        peese_status = peese_status,
-        selected_model = selected
+      uwls_choice_for_scope(
+        scope_name     = scope_name,
+        design_list    = housing.meta.design.list,
+        fit_list       = housing.meta.fit.list,
+        fit_status_tbl = housing.meta.uwls.fit.status,
+        table_all      = housing.meta.uwls.table.all
       )
     }
   )
@@ -238,7 +275,7 @@ housing.meta.design.list <- purrr::imap(
           interaction_terms = character(0)
         )
       }
-    )
+    ) %>% stats::setNames(model.types)
   }
 )
 
@@ -268,34 +305,12 @@ scope.names <- names(housing.meta.scope.data)
 housing.meta.uwls.choice <- purrr::map_dfr(
   scope.names,
   function(scope_name) {
-    pet_status <- housing.meta.uwls.fit.status %>%
-      filter(scope == scope_name, model_type == "pet") %>%
-      pull(fit_status)
-    peese_status <- housing.meta.uwls.fit.status %>%
-      filter(scope == scope_name, model_type == "peese") %>%
-      pull(fit_status)
-
-    pet_p <- housing.meta.uwls.table.all %>%
-      filter(model_scope == scope_name, model_type == "pet", term == "prratio_ln_se") %>%
-      pull(p_value)
-
-    pet_status <- if (length(pet_status) == 0) "missing" else pet_status[[1]]
-    peese_status <- if (length(peese_status) == 0) "missing" else peese_status[[1]]
-    pet_p <- if (length(pet_p) == 0) NA_real_ else pet_p[[1]]
-
-    selected <- dplyr::case_when(
-      pet_status == "ok" & is.finite(pet_p) & pet_p < 0.10 ~ "peese",
-      pet_status == "ok" ~ "pet",
-      pet_status != "ok" & peese_status == "ok" ~ "peese",
-      TRUE ~ "none"
-    )
-
-    tibble(
-      scope = scope_name,
-      pet_p_value = pet_p,
-      pet_status = pet_status,
-      peese_status = peese_status,
-      selected_model = selected
+    uwls_choice_for_scope(
+      scope_name     = scope_name,
+      design_list    = housing.meta.design.list,
+      fit_list       = housing.meta.fit.list,
+      fit_status_tbl = housing.meta.uwls.fit.status,
+      table_all      = housing.meta.uwls.table.all
     )
   }
 )

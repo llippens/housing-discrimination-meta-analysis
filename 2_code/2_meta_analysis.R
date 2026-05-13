@@ -3,7 +3,7 @@ if (!requireNamespace("pak", quietly = TRUE)) install.packages("pak")
 
 pkgs <- c(
   "here", "dplyr", "purrr", "tibble", "stringr",
-  "metafor", "clubSandwich", "fixest", "writexl"
+  "metafor", "clubSandwich", "fixest", "marginaleffects", "writexl"
 )
 
 missing.pkgs <- pkgs[!pkgs %in% rownames(installed.packages())]
@@ -16,6 +16,7 @@ invisible(lapply(pkgs, library, character.only = TRUE))
 # Helpers ####
 source(file.path(here::here(), "2_code", "functions", "core", "f_check_cols.R"))
 source(file.path(here::here(), "2_code", "functions", "core", "f_models.R"))
+source(file.path(here::here(), "2_code", "functions", "reg", "f_pet_peese.R"))
 source(file.path(here::here(), "2_code", "functions", "io", "f_reg_output.R"))
 source(file.path(here::here(), "2_code", "functions", "io", "f_reporting_workbooks.R"))
 
@@ -133,26 +134,25 @@ fit_pet_peese_cell <- function(df, model_type = c("pet", "peese")) {
   )
 
   if (inherits(fit_obj, "error")) {
-    return(
-      tibble(
-        model_type = model_type,
-        fit_status = "error",
-        fit_note = conditionMessage(fit_obj),
-        pet_term = pet_term,
-        model_formula = formula_chr,
-        estimate = NA_real_,
-        std_error = NA_real_,
-        statistic = NA_real_,
-        p_value = NA_real_,
-        conf_low = NA_real_,
-        conf_high = NA_real_,
-        estimate_rr = NA_real_,
-        conf_low_rr = NA_real_,
-        conf_high_rr = NA_real_,
-        pet_term_estimate = NA_real_,
-        pet_term_p_value = NA_real_
-      )
+    table_out <- tibble(
+      model_type = model_type,
+      fit_status = "error",
+      fit_note = conditionMessage(fit_obj),
+      pet_term = pet_term,
+      model_formula = formula_chr,
+      estimate = NA_real_,
+      std_error = NA_real_,
+      statistic = NA_real_,
+      p_value = NA_real_,
+      conf_low = NA_real_,
+      conf_high = NA_real_,
+      estimate_rr = NA_real_,
+      conf_low_rr = NA_real_,
+      conf_high_rr = NA_real_,
+      pet_term_estimate = NA_real_,
+      pet_term_p_value = NA_real_
     )
+    return(list(fit = NULL, table = table_out))
   }
 
   ct <- tryCatch(fixest::coeftable(fit_obj), error = function(e) NULL)
@@ -172,7 +172,7 @@ fit_pet_peese_cell <- function(df, model_type = c("pet", "peese")) {
     }
   }
 
-  tibble(
+  table_out <- tibble(
     model_type = model_type,
     fit_status = "ok",
     fit_note = NA_character_,
@@ -190,35 +190,62 @@ fit_pet_peese_cell <- function(df, model_type = c("pet", "peese")) {
     pet_term_estimate = extract_coef_value(ct, pet_term, 1),
     pet_term_p_value = extract_coef_value(ct, pet_term, 4)
   )
+
+  list(fit = fit_obj, table = table_out)
 }
 
-choose_pet_peese <- function(model_tbl) {
+choose_pet_peese <- function(
+    model_tbl,
+    pet_fit,
+    peese_fit,
+    fitted_frame,
+    ground_abbr,
+    treatment_group
+) {
   pet_status <- model_tbl %>%
-    filter(model_type == "pet") %>%
-    pull(fit_status)
+    dplyr::filter(model_type == "pet") %>%
+    dplyr::pull(fit_status)
   peese_status <- model_tbl %>%
-    filter(model_type == "peese") %>%
-    pull(fit_status)
-  pet_p <- model_tbl %>%
-    filter(model_type == "pet") %>%
-    pull(pet_term_p_value)
+    dplyr::filter(model_type == "peese") %>%
+    dplyr::pull(fit_status)
+  pet_term_p_diag <- model_tbl %>%
+    dplyr::filter(model_type == "pet") %>%
+    dplyr::pull(pet_term_p_value)
 
   pet_status <- if (length(pet_status) == 0) "missing" else pet_status[[1]]
   peese_status <- if (length(peese_status) == 0) "missing" else peese_status[[1]]
-  pet_p <- if (length(pet_p) == 0) NA_real_ else pet_p[[1]]
+  pet_term_p_diag <- if (length(pet_term_p_diag) == 0) NA_real_ else pet_term_p_diag[[1]]
 
-  selected_model <- dplyr::case_when(
-    pet_status == "ok" & is.finite(pet_p) & pet_p < 0.10 ~ "peese",
-    pet_status == "ok" ~ "pet",
-    pet_status != "ok" & peese_status == "ok" ~ "peese",
-    TRUE ~ "none"
+  direction <- expected_direction_for_cell(
+    ground_abbr     = ground_abbr,
+    treatment_group = treatment_group
   )
 
-  tibble(
-    pet_p_value = pet_p,
-    pet_status = pet_status,
-    peese_status = peese_status,
-    selected_model = selected_model
+  pet_fit_eff   <- if (identical(pet_status, "ok"))   pet_fit   else NULL
+  peese_fit_eff <- if (identical(peese_status, "ok")) peese_fit else NULL
+
+  sel <- select_pet_peese_canonical(
+    pet_fit   = pet_fit_eff,
+    peese_fit = peese_fit_eff,
+    newdata   = fitted_frame,
+    direction = direction,
+    alpha     = 0.10,
+    se_var    = "prratio_ln_se",
+    wts       = "uwls_weight"
+  )
+
+  tibble::tibble(
+    pet_status              = pet_status,
+    peese_status            = peese_status,
+    selected_model          = sel$selected_model[[1]],
+    bc_estimate             = sel$bc_estimate[[1]],
+    bc_std_error            = sel$bc_std_error[[1]],
+    bc_statistic            = sel$bc_statistic[[1]],
+    bc_p_value              = sel$bc_p_value[[1]],
+    bc_alpha                = sel$bc_alpha[[1]],
+    bc_direction_used       = sel$bc_direction_used[[1]],
+    selector_note           = sel$selector_note[[1]],
+    pet_term_p_value_diag   = pet_term_p_diag
   )
 }
 
@@ -378,32 +405,52 @@ housing.meta.pet.peese.table <- purrr::pmap_dfr(
         pet_term_estimate = NA_real_,
         pet_term_p_value = NA_real_
       )
+      pet_fit <- NULL
+      peese_fit <- NULL
     } else {
-      model_tbl <- bind_rows(
-        fit_pet_peese_cell(df_use, "pet"),
-        fit_pet_peese_cell(df_use, "peese")
-      )
+      pet_obj   <- fit_pet_peese_cell(df_use, "pet")
+      peese_obj <- fit_pet_peese_cell(df_use, "peese")
+      model_tbl <- bind_rows(pet_obj$table, peese_obj$table)
+      pet_fit   <- pet_obj$fit
+      peese_fit <- peese_obj$fit
     }
 
-    choice <- choose_pet_peese(model_tbl)
+    choice <- choose_pet_peese(
+      model_tbl       = model_tbl,
+      pet_fit         = pet_fit,
+      peese_fit       = peese_fit,
+      fitted_frame    = df_use,
+      ground_abbr     = ground_abbr,
+      treatment_group = treatment_group
+    )
 
     model_tbl %>%
       mutate(
-        cell_type = cell_type,
-        cell_id = cell_id,
-        ground = ground,
-        ground_abbr = ground_abbr,
-        treatment_group = treatment_group,
-        k_rows = as.integer(k_rows),
-        k_studies = as.integer(k_studies),
-        pet_p_value = choice$pet_p_value[[1]],
-        pet_status = choice$pet_status[[1]],
-        peese_status = choice$peese_status[[1]],
-        selected_model = choice$selected_model[[1]]
+        cell_type             = cell_type,
+        cell_id               = cell_id,
+        ground                = ground,
+        ground_abbr           = ground_abbr,
+        treatment_group       = treatment_group,
+        k_rows                = as.integer(k_rows),
+        k_studies             = as.integer(k_studies),
+        pet_status            = choice$pet_status[[1]],
+        peese_status          = choice$peese_status[[1]],
+        selected_model        = choice$selected_model[[1]],
+        bc_estimate           = choice$bc_estimate[[1]],
+        bc_std_error          = choice$bc_std_error[[1]],
+        bc_statistic          = choice$bc_statistic[[1]],
+        bc_p_value            = choice$bc_p_value[[1]],
+        bc_alpha              = choice$bc_alpha[[1]],
+        bc_direction_used     = choice$bc_direction_used[[1]],
+        selector_note         = choice$selector_note[[1]],
+        pet_term_p_value_diag = choice$pet_term_p_value_diag[[1]]
       ) %>%
       select(
         cell_type, cell_id, ground, ground_abbr, treatment_group, k_rows, k_studies,
-        model_type, selected_model, pet_p_value, pet_status, peese_status,
+        model_type, selected_model,
+        bc_estimate, bc_std_error, bc_statistic, bc_p_value, bc_alpha, bc_direction_used,
+        selector_note, pet_term_p_value_diag,
+        pet_status, peese_status,
         fit_status, fit_note, pet_term, model_formula,
         estimate, estimate_rr, std_error, statistic, p_value,
         conf_low, conf_high, conf_low_rr, conf_high_rr,
@@ -415,7 +462,9 @@ housing.meta.pet.peese.table <- purrr::pmap_dfr(
 housing.meta.pet.peese.choice <- housing.meta.pet.peese.table %>%
   distinct(
     cell_type, cell_id, ground, ground_abbr, treatment_group, k_rows, k_studies,
-    pet_p_value, pet_status, peese_status, selected_model
+    pet_status, peese_status, selected_model,
+    bc_estimate, bc_std_error, bc_statistic, bc_p_value, bc_alpha, bc_direction_used,
+    selector_note, pet_term_p_value_diag
   ) %>%
   arrange(cell_type, ground_abbr, treatment_group)
 
